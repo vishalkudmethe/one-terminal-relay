@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Secrets
+*.pem
+*.key
+oneterminal_key.pem
+
+# Databases & Logs
+*.db
+*.log
+*.err
+audit_log.db
+relay.log
+relay.err
+
+# OS
+.DS_Store
+Thumbs.db

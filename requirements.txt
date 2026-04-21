@@ -1,0 +1,11 @@
+requests
+fastapi
+uvicorn
+httpx
+sqlalchemy
+python-dotenv
+websockets
+python-multipart
+alpaca-py
+boto3
+ 
