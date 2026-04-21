@@ -4,9 +4,11 @@ import httpx
 import os
 import json
 import urllib.parse
+import logging
 from services.utils import get_db, parse_ot_context, AuditLog, HOP_BY_HOP_HEADERS
 import config
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 client = httpx.AsyncClient()
 

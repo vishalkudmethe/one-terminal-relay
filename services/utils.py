@@ -4,7 +4,7 @@ from datetime import datetime
 import config
 
 # ---- Database Setup (SEBI Compliance) ----
-engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 15.0})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
