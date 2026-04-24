@@ -16,7 +16,7 @@ from services.indian_stock_brokers import (
     angel_handler, fyers_handler, upstox_handler, zerodha_handler, 
     groww_handler, icici_handler, kotak_handler, hdfc_handler,
     dhan_handler, motilal_handler, anandrathi_handler, prabhudas_handler,
-    axis_handler, iifl_handler
+    axis_handler, iifl_handler, nuvama_handler, profitmart_handler, religare_handler
 )
 from services.international_brokers import alpaca_handler, nium_handler
 
@@ -81,6 +81,9 @@ app.include_router(anandrathi_handler.router, prefix="/anandrathi", tags=["Anand
 app.include_router(prabhudas_handler.router, prefix="/prabhudas", tags=["Prabhudas Lilladher"])
 app.include_router(axis_handler.router, prefix="/axis", tags=["Axis Direct"])
 app.include_router(iifl_handler.router, prefix="/iifl", tags=["IIFL"])
+app.include_router(nuvama_handler.router, prefix="/nuvama", tags=["Nuvama"])
+app.include_router(profitmart_handler.router, prefix="/profitmart", tags=["Profitmart"])
+app.include_router(religare_handler.router, prefix="/religare", tags=["Religare"])
 app.include_router(alpaca_handler.router, prefix="/v1/alpaca", tags=["Alpaca"])
 app.include_router(nium_handler.router, prefix="/v1/nium", tags=["Nium"])
 
@@ -125,7 +128,7 @@ async def health():
         "status": "Live", 
         "version": config.VERSION, 
         "architecture": "Modular (Router-Handler)",
-        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "dhan", "motilal", "anandrathi", "prabhudas", "axis", "iifl", "binance", "alpaca"]
+        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "dhan", "motilal", "anandrathi", "prabhudas", "axis", "iifl", "nuvama", "profitmart", "religare", "binance", "alpaca"]
     }
 
 @app.api_route("/relay", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -178,6 +181,12 @@ async def universal_relay(
         return await axis_handler.handle_axis_request(path, request, db, xff, uuid)
     elif broker == "iifl":
         return await iifl_handler.handle_iifl_request(path, request, db, xff, uuid)
+    elif broker == "nuvama":
+        return await nuvama_handler.handle_nuvama_request(path, request, db, xff, uuid)
+    elif broker == "profitmart":
+        return await profitmart_handler.handle_profitmart_request(path, request, db, xff, uuid)
+    elif broker == "religare":
+        return await religare_handler.handle_religare_request(path, request, db, xff, uuid)
     else:
         return JSONResponse(status_code=501, content={"error": f"Handler for '{broker}' not implemented yet."})
 

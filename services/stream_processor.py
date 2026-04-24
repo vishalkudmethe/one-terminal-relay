@@ -14,6 +14,9 @@ from services.indian_stock_brokers.anandrathi_ws import anandrathi_client
 from services.indian_stock_brokers.prabhudas_ws import prabhudas_client
 from services.indian_stock_brokers.axis_ws import axis_client
 from services.indian_stock_brokers.iifl_ws import iifl_client
+from services.indian_stock_brokers.nuvama_ws import nuvama_client
+from services.indian_stock_brokers.profitmart_ws import profitmart_client
+from services.indian_stock_brokers.religare_ws import religare_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,12 @@ def get_broker_client(user_id: str, broker: str, token: str, manager):
         return axis_client(user_id, token, manager)
     elif broker == "iifl":
         return iifl_client(user_id, token, manager)
+    elif broker == "nuvama":
+        return nuvama_client(user_id, token, manager)
+    elif broker == "profitmart":
+        return profitmart_client(user_id, token, manager)
+    elif broker == "religare":
+        return religare_client(user_id, token, manager)
     else:
         logger.warning(f"[StreamProcessor] No client found for broker: {broker}")
         return None

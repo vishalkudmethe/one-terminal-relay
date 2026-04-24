@@ -918,6 +918,21 @@ class MasterMigrator:
         self.all_items.extend(filtered_mcx)
         self.all_items.extend(filtered_nfo)
 
+    def process_nuvama(self):
+        logger.info("Fetching Nuvama master...")
+        # Nuvama requires auth to hit their master endpoint
+        logger.info("Nuvama Master fetch requires auth. Stub executed.")
+
+    def process_profitmart(self):
+        logger.info("Fetching Profitmart master...")
+        # Profitmart requires auth to hit their master endpoint
+        logger.info("Profitmart Master fetch requires auth. Stub executed.")
+
+    def process_religare(self):
+        logger.info("Fetching Religare master...")
+        # Religare requires auth to hit their master endpoint
+        logger.info("Religare Master fetch requires auth. Stub executed.")
+
     def run(self):
         # Step 1: Complete Wipe
         self.wipe_all()
@@ -937,6 +952,9 @@ class MasterMigrator:
         self.process_prabhudas()
         self.process_axis()
         self.process_iifl()
+        self.process_nuvama()
+        self.process_profitmart()
+        self.process_religare()
         
         # Step 3: Push clean data
         self.batch_push()
