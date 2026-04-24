@@ -681,6 +681,26 @@ class MasterMigrator:
         self.all_items.extend(filtered_mcx)
         self.all_items.extend(filtered_nfo)
 
+    def process_icici(self):
+        logger.info("Fetching ICICI Breeze master...")
+        import urllib.request, csv, io
+        url = "https://api.icicidirect.com/breezeapi/documents/index.html#instruments"
+        # ICICI Breeze requires auth for the actual CSV endpoints.
+        # This is a stub that should be replaced with the authenticated fetch
+        # when an active session is provided via config/database.
+        logger.info("ICICI Master fetch requires auth. Stub executed.")
+
+    def process_kotak(self):
+        logger.info("Fetching Kotak Neo master...")
+        # Kotak Neo requires auth to fetch the masterscrip paths via:
+        # /script-details/1.0/masterscrip/file-paths
+        logger.info("Kotak Neo Master fetch requires auth. Stub executed.")
+
+    def process_hdfc(self):
+        logger.info("Fetching HDFC Sky master...")
+        # HDFC Sky requires auth to hit their Security Master API
+        logger.info("HDFC Sky Master fetch requires auth. Stub executed.")
+
     def run(self):
         # Step 1: Complete Wipe
         self.wipe_all()
@@ -691,6 +711,9 @@ class MasterMigrator:
         self.process_upstox()
         self.process_zerodha()
         self.process_groww()
+        self.process_icici()
+        self.process_kotak()
+        self.process_hdfc()
         
         # Step 3: Push clean data
         self.batch_push()

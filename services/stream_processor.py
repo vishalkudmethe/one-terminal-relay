@@ -5,6 +5,9 @@ from services.indian_stock_brokers.fyers_ws import fyers_client
 from services.indian_stock_brokers.upstox_ws import upstox_client
 from services.indian_stock_brokers.zerodha_ws import zerodha_client
 from services.indian_stock_brokers.groww_ws import groww_client
+from services.indian_stock_brokers.icici_ws import icici_client
+from services.indian_stock_brokers.kotak_ws import kotak_client
+from services.indian_stock_brokers.hdfc_ws import hdfc_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,12 @@ def get_broker_client(user_id: str, broker: str, token: str, manager):
         return zerodha_client(user_id, token, manager)
     elif broker == "groww":
         return groww_client(user_id, token, manager)
+    elif broker == "icici":
+        return icici_client(user_id, token, manager)
+    elif broker == "kotak":
+        return kotak_client(user_id, token, manager)
+    elif broker == "hdfc":
+        return hdfc_client(user_id, token, manager)
     else:
         logger.warning(f"[StreamProcessor] No client found for broker: {broker}")
         return None
