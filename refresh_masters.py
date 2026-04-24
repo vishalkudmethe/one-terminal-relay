@@ -696,10 +696,108 @@ class MasterMigrator:
         # /script-details/1.0/masterscrip/file-paths
         logger.info("Kotak Neo Master fetch requires auth. Stub executed.")
 
-    def process_hdfc(self):
-        logger.info("Fetching HDFC Sky master...")
-        # HDFC Sky requires auth to hit their Security Master API
-        logger.info("HDFC Sky Master fetch requires auth. Stub executed.")
+    def process_dhan(self):
+        logger.info("Fetching DhanHQ master...")
+        import urllib.request, csv, io
+        # DhanHQ public instrument CSV
+        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+        try:
+            r = urllib.request.urlopen(url)
+            csv_data = r.read().decode('utf-8')
+            reader = csv.DictReader(io.StringIO(csv_data))
+        except Exception as e:
+            logger.error(f"Failed to fetch Dhan master: {e}")
+            return
+
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+
+        for row in reader:
+            exch_id = row.get("SEM_EXM_EXCH_ID", "").upper()
+            segment = row.get("SEM_SEGMENT", "").upper()
+            
+            # Map Dhan exchanges
+            std_exch = ""
+            if exch_id == "NSE":
+                std_exch = "NSE" if segment == "EQ" else "NFO"
+            elif exch_id == "MCX":
+                std_exch = "MCX"
+            else:
+                continue
+
+            raw_itype = row.get("SEM_INSTRUMENT_NAME", "").upper()
+            if raw_itype == "EQUITIES" or raw_itype == "EQ":
+                u_itype = "EQUITY"
+            elif "FUT" in raw_itype:
+                u_itype = "FUTURES"
+            elif "OPT" in raw_itype:
+                u_itype = "OPTIONS"
+            else:
+                continue
+
+            base_symbol = row.get("SEM_CUSTOM_SYMBOL", "") or row.get("SEM_TRADING_SYMBOL", "")
+            security_id = row.get("SEM_SMST_SECURITY_ID", "")
+            
+            expiry_raw = row.get("SEM_EXPIRY_DATE", "")
+            expiry_str = ""
+            if expiry_raw and u_itype != "EQUITY":
+                try:
+                    # Dhan format typically: "2024-03-28 14:30:00"
+                    dt = datetime.strptime(expiry_raw.split()[0], "%Y-%m-%d")
+                    expiry_str = dt.strftime("%d%b%Y").upper()
+                except:
+                    pass
+
+            uId = self.generate_uId(
+                std_exch, base_symbol, u_itype,
+                expiry=expiry_str,
+                strike=row.get("SEM_STRIKE_PRICE"),
+                option_type=row.get("SEM_OPTION_TYPE")
+            )
+
+            # Native token for Dhan WS: "ExchangeSegment:SecurityId"
+            seg_str = "NSE_EQ" if std_exch == "NSE" and u_itype == "EQUITY" else "NSE_FO" if std_exch == "NFO" else "MCX_FO"
+            native_token = f"{seg_str}:{security_id}"
+
+            record = {
+                "uId": uId,
+                "broker_name": "dhan",
+                "native_token": native_token,
+                "symbol": base_symbol,
+                "full_symbol": row.get("SEM_TRADING_SYMBOL"),
+                "exch": std_exch,
+                "itype": u_itype,
+                "expiry": expiry_str,
+                "strike": row.get("SEM_STRIKE_PRICE"),
+                "lotsize": row.get("SEM_LOT_SIZE", 0),
+                "cp": 0.0
+            }
+
+            if u_itype == "EQUITY":
+                equity_items.append(record)
+            elif u_itype == "FUTURES" and std_exch == "MCX":
+                mcx_futures.append(record)
+            elif u_itype == "FUTURES" and std_exch == "NFO":
+                nfo_futures.append(record)
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} Dhan MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} Dhan NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"Dhan processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, {len(filtered_nfo)} NFO futures."
+        )
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
+
+    def process_motilal(self):
+        logger.info("Fetching Motilal Oswal master...")
+        # Motilal Oswal MOAPI requires auth to hit their getscripsbyexchangename API
+        logger.info("Motilal Oswal Master fetch requires auth. Stub executed.")
 
     def run(self):
         # Step 1: Complete Wipe
@@ -714,6 +812,8 @@ class MasterMigrator:
         self.process_icici()
         self.process_kotak()
         self.process_hdfc()
+        self.process_dhan()
+        self.process_motilal()
         
         # Step 3: Push clean data
         self.batch_push()

@@ -12,7 +12,11 @@ from services.currency_service import CurrencyService
 from services.ws_manager import manager
 from services.unified_ws_manager import unified_manager
 from services.token_manager import token_manager
-from services.indian_stock_brokers import angel_handler, fyers_handler, upstox_handler, zerodha_handler, groww_handler, icici_handler, kotak_handler, hdfc_handler
+from services.indian_stock_brokers import (
+    angel_handler, fyers_handler, upstox_handler, zerodha_handler, 
+    groww_handler, icici_handler, kotak_handler, hdfc_handler,
+    dhan_handler, motilal_handler
+)
 from services.international_brokers import alpaca_handler, nium_handler
 
 # Configure Logging
@@ -70,6 +74,8 @@ app.include_router(groww_handler.router, prefix="/groww", tags=["Groww"])
 app.include_router(icici_handler.router, prefix="/icici", tags=["ICICI"])
 app.include_router(kotak_handler.router, prefix="/kotak", tags=["Kotak"])
 app.include_router(hdfc_handler.router, prefix="/hdfc", tags=["HDFC"])
+app.include_router(dhan_handler.router, prefix="/dhan", tags=["Dhan"])
+app.include_router(motilal_handler.router, prefix="/motilal", tags=["Motilal Oswal"])
 app.include_router(alpaca_handler.router, prefix="/v1/alpaca", tags=["Alpaca"])
 app.include_router(nium_handler.router, prefix="/v1/nium", tags=["Nium"])
 
@@ -114,7 +120,7 @@ async def health():
         "status": "Live", 
         "version": config.VERSION, 
         "architecture": "Modular (Router-Handler)",
-        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "binance", "alpaca"]
+        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "dhan", "motilal", "binance", "alpaca"]
     }
 
 @app.api_route("/relay", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -155,6 +161,10 @@ async def universal_relay(
         return await kotak_handler.handle_kotak_request(path, request, db, xff, uuid)
     elif broker == "hdfc":
         return await hdfc_handler.handle_hdfc_request(path, request, db, xff, uuid)
+    elif broker == "dhan":
+        return await dhan_handler.handle_dhan_request(path, request, db, xff, uuid)
+    elif broker == "motilal":
+        return await motilal_handler.handle_motilal_request(path, request, db, xff, uuid)
     else:
         return JSONResponse(status_code=501, content={"error": f"Handler for '{broker}' not implemented yet."})
 

@@ -8,6 +8,8 @@ from services.indian_stock_brokers.groww_ws import groww_client
 from services.indian_stock_brokers.icici_ws import icici_client
 from services.indian_stock_brokers.kotak_ws import kotak_client
 from services.indian_stock_brokers.hdfc_ws import hdfc_client
+from services.indian_stock_brokers.dhan_ws import dhan_client
+from services.indian_stock_brokers.motilal_ws import motilal_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ def get_broker_client(user_id: str, broker: str, token: str, manager):
         return kotak_client(user_id, token, manager)
     elif broker == "hdfc":
         return hdfc_client(user_id, token, manager)
+    elif broker == "dhan":
+        return dhan_client(user_id, token, manager)
+    elif broker == "motilal":
+        return motilal_client(user_id, token, manager)
     else:
         logger.warning(f"[StreamProcessor] No client found for broker: {broker}")
         return None
