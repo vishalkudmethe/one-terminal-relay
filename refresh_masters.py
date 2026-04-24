@@ -799,6 +799,16 @@ class MasterMigrator:
         # Motilal Oswal MOAPI requires auth to hit their getscripsbyexchangename API
         logger.info("Motilal Oswal Master fetch requires auth. Stub executed.")
 
+    def process_anandrathi(self):
+        logger.info("Fetching Anand Rathi master...")
+        # Anand Rathi (XTS) requires auth to hit their master endpoint
+        logger.info("Anand Rathi Master fetch requires auth. Stub executed.")
+
+    def process_prabhudas(self):
+        logger.info("Fetching Prabhudas Lilladher master...")
+        # Prabhudas Lilladher requires auth to hit their master endpoint
+        logger.info("Prabhudas Lilladher Master fetch requires auth. Stub executed.")
+
     def run(self):
         # Step 1: Complete Wipe
         self.wipe_all()
@@ -814,6 +824,8 @@ class MasterMigrator:
         self.process_hdfc()
         self.process_dhan()
         self.process_motilal()
+        self.process_anandrathi()
+        self.process_prabhudas()
         
         # Step 3: Push clean data
         self.batch_push()
