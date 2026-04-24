@@ -809,6 +809,115 @@ class MasterMigrator:
         # Prabhudas Lilladher requires auth to hit their master endpoint
         logger.info("Prabhudas Lilladher Master fetch requires auth. Stub executed.")
 
+    def process_axis(self):
+        logger.info("Fetching Axis Direct master...")
+        # Axis Direct requires auth to hit their master endpoint
+        logger.info("Axis Direct Master fetch requires auth. Stub executed.")
+
+    def process_iifl(self):
+        logger.info("Fetching IIFL Markets master...")
+        import urllib.request, csv, io
+        # IIFL Markets public instrument CSV
+        url = "http://content.indiainfoline.com/IIFLTT/Scripmaster.csv"
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            r = urllib.request.urlopen(req)
+            csv_data = r.read().decode('utf-8')
+            reader = csv.DictReader(io.StringIO(csv_data))
+        except Exception as e:
+            logger.error(f"Failed to fetch IIFL master: {e}")
+            return
+
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+
+        for row in reader:
+            exch_id = row.get("Exch", "").upper()
+            segment = row.get("ExchType", "").upper()
+            
+            # Map IIFL exchanges
+            std_exch = ""
+            if exch_id == "N":
+                std_exch = "NSE" if segment == "C" else "NFO"
+            elif exch_id == "M":
+                std_exch = "MCX"
+            else:
+                continue
+
+            # In IIFL, ExchType "C" is Cash/Equity, "D" is Derivative, "U" is Currency, "Y" is Commodity
+            if segment == "C":
+                u_itype = "EQUITY"
+            elif segment in ["D", "Y"]:
+                # Check CpType to differentiate Futures vs Options
+                if row.get("CpType", "") == "XX":
+                    u_itype = "FUTURES"
+                else:
+                    u_itype = "OPTIONS"
+            else:
+                continue
+
+            base_symbol = row.get("Name", "")
+            security_id = row.get("ScripCode", "")
+            
+            expiry_raw = row.get("Expiry", "")
+            expiry_str = ""
+            if expiry_raw and u_itype != "EQUITY":
+                try:
+                    # IIFL expiry format usually resembles "20240328" or "28-Mar-2024"
+                    # Attempt simple parsing if it exists
+                    if '-' in expiry_raw:
+                        dt = datetime.strptime(expiry_raw, "%d-%b-%Y")
+                    else:
+                        dt = datetime.strptime(expiry_raw[:8], "%Y%m%d")
+                    expiry_str = dt.strftime("%d%b%Y").upper()
+                except:
+                    pass
+
+            uId = self.generate_uId(
+                std_exch, base_symbol, u_itype,
+                expiry=expiry_str,
+                strike=row.get("StrikeRate"),
+                option_type=row.get("CpType")
+            )
+
+            # Native token for IIFL WS: "Exch,ExchType,ScripCode" e.g. "N,C,2885"
+            native_token = f"{exch_id},{segment},{security_id}"
+
+            record = {
+                "uId": uId,
+                "broker_name": "iifl",
+                "native_token": native_token,
+                "symbol": base_symbol,
+                "full_symbol": base_symbol,
+                "exch": std_exch,
+                "itype": u_itype,
+                "expiry": expiry_str,
+                "strike": row.get("StrikeRate"),
+                "lotsize": 0, # Note: LotSize might require a separate fetch or mapping in IIFL
+                "cp": 0.0
+            }
+
+            if u_itype == "EQUITY":
+                equity_items.append(record)
+            elif u_itype == "FUTURES" and std_exch == "MCX":
+                mcx_futures.append(record)
+            elif u_itype == "FUTURES" and std_exch == "NFO":
+                nfo_futures.append(record)
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} IIFL MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} IIFL NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"IIFL processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, {len(filtered_nfo)} NFO futures."
+        )
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
+
     def run(self):
         # Step 1: Complete Wipe
         self.wipe_all()
@@ -826,6 +935,8 @@ class MasterMigrator:
         self.process_motilal()
         self.process_anandrathi()
         self.process_prabhudas()
+        self.process_axis()
+        self.process_iifl()
         
         # Step 3: Push clean data
         self.batch_push()
