@@ -8,4 +8,5 @@ websockets
 python-multipart
 alpaca-py
 boto3
- 
+protobuf
+grpcio-tools

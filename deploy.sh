@@ -30,6 +30,11 @@ Group=www-data
 WorkingDirectory=/home/ubuntu/relay
 Environment="PATH=/home/ubuntu/relay/venv/bin"
 Environment="GATEWAY_SECRET=super-secret-relay-token-change-me"
+# Angel One - Relay's own trading account credentials for market data streaming
+# Get these from: Angel SmartAPI dashboard -> Your Apps -> Feed Token
+Environment="ANGEL_CLIENT_ID=YOUR_ANGEL_CLIENT_ID"
+Environment="ANGEL_FEED_TOKEN=YOUR_ANGEL_FEED_TOKEN"
+Environment="ANGEL_API_KEY=YOUR_ANGEL_API_KEY"
 ExecStart=/home/ubuntu/relay/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 4
 
 [Install]

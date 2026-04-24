@@ -3,6 +3,7 @@ import os
 # ---- Configuration ----
 GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "super-secret-relay-token-change-me")
 DATABASE_URL = "sqlite:///./audit_log.db"
+DYNAMODB_TABLE_NAME = "OneTerminal_Master"
 
 BROKER_URLS = {
     "angel": "https://apiconnect.angelbroking.com",

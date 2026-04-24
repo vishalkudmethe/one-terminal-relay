@@ -45,12 +45,7 @@ async def _fyers_data_client(user_id: str, token: str, manager):
                                 cp = struct.unpack("<f", message[offset+4:offset+8])[0] if topic_id == 7208 and len(message) >= offset + 8 else 0.0
                                 
                                 if ltp > 0:
-                                    await manager.broadcast_to_user(user_id, {
-                                        "broker": "fyers", "symbol": symbol,
-                                        "lp": round(ltp, 2), # Unified key
-                                        "ltp": round(ltp, 2), "cp": round(cp, 2),
-                                        "type": "UPDATE"
-                                    })
+                                    await manager.broadcast_tick(user_id, "fyers", symbol, ltp)
                         else:
                             data = json.loads(message)
                             if data.get('s') == 'ok': logger.info(f"Fyers Auth Success for {user_id}")

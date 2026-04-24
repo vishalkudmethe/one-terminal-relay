@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package oneterminal;
+
+message TickUpdate {
+  string uId = 1;      // Universal ID (e.g., "NSE:RELIANCE")
+  float ltp = 2;       // Last Traded Price
+  float chg = 3;       // Absolute Change
+  float chgp = 4;      // Change Percent
+  uint64 v = 5;        // Volume
+  uint64 ts = 6;       // Timestamp (ms)
+  float cp = 7;        // Close Price
+  uint32 exp_seq = 8;  // Expiry Sequence (1=Near, 2=Next, 3=Far)
+}

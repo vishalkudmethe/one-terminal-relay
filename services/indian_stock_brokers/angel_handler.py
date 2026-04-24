@@ -13,39 +13,38 @@ client = httpx.AsyncClient()
 @router.get("/search-mcx")
 async def search_mcx(type: str = Query("futures"), symbol: str = Query(None)):
     """Search within Angel One MCX Micro-DB Segments"""
-    filename = "angel_mcx_futures_master.json" if type == "futures" else "angel_mcx_options_master.json"
-    filepath = os.path.join(config.ANGEL_SEGMENTS_DIR, filename)
-
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
-                data = json.load(f)
-                if type == "options" and symbol:
-                    data = [item for item in data if item["name"] == symbol.upper()]
-                return JSONResponse(data)
-        except Exception as e:
-            return JSONResponse({"error": "Failed to read data", "details": str(e)}, status_code=500)
-    
-    # Return empty list instead of 404 to prevent app-side resolve failures
-    return JSONResponse([])
+    from services.token_manager import token_manager
+    if type == "futures":
+        data = token_manager.get_angel_mcx_futures()
+    else:
+        data = token_manager.get_angel_mcx_options()
+        if symbol:
+            data = [item for item in data if item.get("name") == symbol.upper()]
+    return JSONResponse(data)
 
 @router.get("/search-nse")
 async def search_nse(type: str = Query("futures"), symbol: str = Query(None)):
-    """Search within Angel One NSE F&O Micro-DB Segments"""
-    filename = "angel_nse_futures_master.json" if type == "futures" else "angel_nse_options_master.json"
-    filepath = os.path.join(config.ANGEL_SEGMENTS_DIR, filename)
+    """Search within Angel One NSE (F&O and Equity) Micro-DB Segments"""
+    from services.token_manager import token_manager
+    if type == "futures":
+        data = token_manager.get_angel_nse_futures()
+        return JSONResponse(data)
+    # Options and Equity omitted for brevity as they are fetched differently 
+    # and we mainly use /search-nse for futures in NFO bootstrapper.
+    return JSONResponse([])
 
+@router.get("/search-bse")
+async def search_bse(type: str = Query("equity"), symbol: str = Query(None)):
+    """Search within Angel One BSE Micro-DB Segments"""
+    filename = "angel_bse_equity_master.json"
+    filepath = os.path.join(config.ANGEL_SEGMENTS_DIR, filename)
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
                 data = json.load(f)
-                if type == "options" and symbol:
-                    data = [item for item in data if item["name"] == symbol.upper()]
                 return JSONResponse(data)
         except Exception as e:
             return JSONResponse({"error": "Failed to read data", "details": str(e)}, status_code=500)
-    
-    # Return empty list instead of 404
     return JSONResponse([])
 
 async def handle_angel_request(path: str, request: Request, db, xff, uuid):
@@ -108,8 +107,24 @@ async def handle_angel_request(path: str, request: Request, db, xff, uuid):
             follow_redirects=False, timeout=30.0
         )
 
+        resp_body = await resp.aread()
+        
+        # Capture feedToken on successful login
+        if "loginByPassword" in path and resp.status_code == 200:
+            try:
+                data = json.loads(resp_body)
+                if data.get("status") is True and data.get("data"):
+                    f_token = data["data"].get("feedToken")
+                    c_code = data["data"].get("clientcode") or headers.get("X-User-ID")
+                    a_key = headers.get("X-PrivateKey") or headers.get("X-Api-Key")
+                    if f_token and c_code and a_key:
+                        from services.indian_stock_brokers.angel_ws import update_angel_creds
+                        # Using c_code as the key because it matches the user_id in the WebSocket connection
+                        update_angel_creds(c_code, c_code, f_token, a_key)
+            except: pass
+
         final_headers = {k: v for k, v in resp.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
-        return StreamingResponse(iter([await resp.aread()]), status_code=resp.status_code, headers=final_headers)
+        return StreamingResponse(iter([resp_body]), status_code=resp.status_code, headers=final_headers)
     except httpx.ConnectError:
         return JSONResponse({"error": "Failed to connect to Angel One"}, status_code=502)
     except Exception as e:

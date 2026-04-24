@@ -57,12 +57,7 @@ async def _upstox_data_client(user_id: str, token: str, manager):
                                             cp = struct.unpack("<d", message[cp_idx+1:cp_idx+9])[0]
                                         
                                         if ltp > 0:
-                                            await manager.broadcast_to_user(user_id, {
-                                                "broker": "upstox", "symbol": sym,
-                                                "lp": round(ltp, 2), # Unified key
-                                                "ltp": round(ltp, 2), "cp": round(cp, 2),
-                                                "type": "UPDATE"
-                                            })
+                                            await manager.broadcast_tick(user_id, "upstox", sym, ltp)
                     except asyncio.TimeoutError: continue
                     except Exception as e:
                         logger.error(f"Upstox Stream Error: {e}")
