@@ -64,37 +64,43 @@ class MasterMigrator:
         
         return f"{exch}:{symbol}"
 
-    def wipe_derivatives(self):
-        """Delete all MCX and NFO futures/options entries from DynamoDB before re-sync."""
-        logger.info("Wiping existing MCX and NFO derivative entries from DynamoDB...")
+    def wipe_all(self):
+        """Delete ALL entries from DynamoDB before re-sync to ensure a 100% clean slate."""
+        logger.info(f"Initiating Complete Wipe of DynamoDB table: {self.table_name}")
+        
+        # We need concurrent.futures for parallel wipe
+        import concurrent.futures
         
         to_delete = []
         
-        # Scan for all MCX and NFO items
-        for exch_target in ["MCX", "NFO"]:
+        # Scan entire table (ProjectionExpression to save bandwidth)
+        response = self.table.scan(ProjectionExpression="uId, broker_name")
+        to_delete.extend(response.get('Items', []))
+        while 'LastEvaluatedKey' in response:
             response = self.table.scan(
-                FilterExpression=boto3.dynamodb.conditions.Attr('exch').eq(exch_target)
+                ProjectionExpression="uId, broker_name",
+                ExclusiveStartKey=response['LastEvaluatedKey']
             )
             to_delete.extend(response.get('Items', []))
-            while 'LastEvaluatedKey' in response:
-                response = self.table.scan(
-                    FilterExpression=boto3.dynamodb.conditions.Attr('exch').eq(exch_target),
-                    ExclusiveStartKey=response['LastEvaluatedKey']
-                )
-                to_delete.extend(response.get('Items', []))
 
         if not to_delete:
-            logger.info("No existing derivative entries found to wipe.")
+            logger.info("Table is already empty.")
             return
 
-        logger.info(f"Deleting {len(to_delete)} existing derivative entries...")
-        with self.table.batch_writer() as batch:
-            for item in to_delete:
-                batch.delete_item(Key={
-                    'uId': item['uId'],
-                    'broker_name': item['broker_name']
-                })
-        logger.info(f"Wipe complete. Deleted {len(to_delete)} items.")
+        logger.info(f"Found {len(to_delete)} items. Deleting in parallel batches...")
+        
+        # Split into chunks of 25 (DynamoDB max batch size for write)
+        chunks = [to_delete[i:i + 25] for i in range(0, len(to_delete), 25)]
+        
+        def delete_batch(chunk):
+            with self.table.batch_writer() as batch:
+                for item in chunk:
+                    batch.delete_item(Key={'uId': item['uId'], 'broker_name': item['broker_name']})
+                    
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            executor.map(delete_batch, chunks)
+            
+        logger.info(f"Complete Wipe successful. Deleted {len(to_delete)} items.")
 
     def batch_push(self):
         if not self.all_items:
@@ -269,13 +275,422 @@ class MasterMigrator:
         self.all_items.extend(filtered_nfo)
         # Note: Options are NOT wiped/re-imported here to avoid massive load.
         # They are fetched on-demand via the /angel/search-mcx?type=options endpoint.
+    def process_upstox(self):
+        logger.info("Fetching Upstox master...")
+        import urllib.request, gzip, io, csv
+        url = "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"
+        try:
+            r = urllib.request.urlopen(url)
+            csv_data = gzip.GzipFile(fileobj=io.BytesIO(r.read())).read().decode('utf-8')
+            reader = csv.DictReader(io.StringIO(csv_data))
+        except Exception as e:
+            logger.error(f"Failed to fetch Upstox master: {e}")
+            return
+            
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+        options_items = []
+
+        for row in reader:
+            exch = row.get("exchange", "").upper()
+            if exch not in ["NSE_EQ", "BSE_EQ", "NSE_FO", "MCX_FO"]:
+                continue
+            
+            raw_itype = row.get("instrument_type", "").upper()
+            if raw_itype == "EQUITY":
+                u_itype = "EQUITY"
+            elif raw_itype in ["FUTCOM", "FUTSTK", "FUTIDX"] or "FUT" in raw_itype:
+                u_itype = "FUTURES"
+            elif raw_itype in ["OPTCOM", "OPTSTK", "OPTIDX"] or "OPT" in raw_itype:
+                u_itype = "OPTIONS"
+            else:
+                continue
+
+            std_exch = "NSE"
+            if exch == "BSE_EQ": std_exch = "BSE"
+            elif exch == "MCX_FO": std_exch = "MCX"
+            elif exch == "NSE_FO": std_exch = "NFO"
+
+            base_symbol = row.get("name", "") if row.get("name", "") else row.get("tradingsymbol", "")
+            
+            expiry_raw = row.get("expiry", "")
+            expiry_str = ""
+            if expiry_raw:
+                try:
+                    dt = datetime.strptime(expiry_raw, "%Y-%m-%d")
+                    expiry_str = dt.strftime("%d%b%Y").upper()
+                except:
+                    pass
+
+            uId = self.generate_uId(
+                std_exch,
+                base_symbol,
+                u_itype,
+                expiry=expiry_str,
+                strike=row.get("strike"),
+                option_type=row.get("option_type")
+            )
+
+            record = {
+                "uId": uId,
+                "broker_name": "upstox",
+                "native_token": row.get("instrument_key"),
+                "symbol": base_symbol,
+                "full_symbol": row.get("tradingsymbol"),
+                "exch": std_exch,
+                "itype": u_itype,
+                "expiry": expiry_str,
+                "strike": row.get("strike"),
+                "lotsize": row.get("lot_size", 0),
+                "cp": float(row.get("last_price", 0.0) or 0)
+            }
+
+            if u_itype == "EQUITY":
+                equity_items.append(record)
+            elif u_itype == "FUTURES" and std_exch == "MCX":
+                mcx_futures.append(record)
+            elif u_itype == "FUTURES" and std_exch == "NFO":
+                nfo_futures.append(record)
+            elif u_itype == "OPTIONS":
+                options_items.append(record)
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} Upstox MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} Upstox NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"Upstox processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, "
+            f"{len(filtered_nfo)} NFO futures, "
+            f"{len(options_items)} options."
+        )
+
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
+
+    def process_fyers(self):
+        logger.info("Fetching Fyers master...")
+        import urllib.request, csv, io
+        
+        urls = {
+            "NSE_EQ": "https://public.fyers.in/sym_details/NSE_CM.csv",
+            "NSE_FO": "https://public.fyers.in/sym_details/NSE_FO.csv",
+            "MCX_FO": "https://public.fyers.in/sym_details/MCX_FO.csv"
+        }
+        
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+        options_items = []
+
+        for category, url in urls.items():
+            try:
+                r = urllib.request.urlopen(url)
+                csv_data = r.read().decode('utf-8')
+                reader = csv.reader(io.StringIO(csv_data))
+                
+                for row in reader:
+                    if len(row) < 16:
+                        continue
+                        
+                    fytoken = row[0]
+                    name = row[1]
+                    lotsize = row[3]
+                    expiry_raw = row[7] # Timestamp or Date string
+                    symbol_str = row[9] # NSE:RELIANCE-EQ or NSE:NIFTY24APR22000CE
+                    
+                    # Determine type from symbol
+                    if "-EQ" in symbol_str:
+                        u_itype = "EQUITY"
+                        base_symbol = name
+                        std_exch = "NSE"
+                    elif "FUT" in symbol_str and "MCX:" in symbol_str:
+                        u_itype = "FUTURES"
+                        base_symbol = name.split()[0] if name else ""
+                        std_exch = "MCX"
+                    elif "FUT" in symbol_str and "NSE:" in symbol_str:
+                        u_itype = "FUTURES"
+                        base_symbol = name.split()[0] if name else ""
+                        std_exch = "NFO"
+                    elif "CE" in symbol_str or "PE" in symbol_str:
+                        u_itype = "OPTIONS"
+                        base_symbol = name.split()[0] if name else ""
+                        std_exch = "NFO" if "NSE:" in symbol_str else "MCX"
+                    else:
+                        continue
+                        
+                    expiry_str = ""
+                    # Fyers usually sends timestamps for expiry
+                    if expiry_raw and expiry_raw != 'None' and expiry_raw.isdigit():
+                        try:
+                            dt = datetime.fromtimestamp(int(expiry_raw))
+                            expiry_str = dt.strftime("%d%b%Y").upper()
+                        except:
+                            pass
+                            
+                    uId = self.generate_uId(
+                        std_exch,
+                        base_symbol,
+                        u_itype,
+                        expiry=expiry_str
+                    )
+
+                    record = {
+                        "uId": uId,
+                        "broker_name": "fyers",
+                        "native_token": fytoken,
+                        "symbol": base_symbol,
+                        "full_symbol": symbol_str,
+                        "exch": std_exch,
+                        "itype": u_itype,
+                        "expiry": expiry_str,
+                        "lotsize": lotsize,
+                        "cp": 0.0
+                    }
+
+                    if u_itype == "EQUITY":
+                        equity_items.append(record)
+                    elif u_itype == "FUTURES" and std_exch == "MCX":
+                        mcx_futures.append(record)
+                    elif u_itype == "FUTURES" and std_exch == "NFO":
+                        nfo_futures.append(record)
+                    elif u_itype == "OPTIONS":
+                        options_items.append(record)
+            except Exception as e:
+                logger.error(f"Failed to fetch Fyers {category}: {e}")
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} Fyers MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} Fyers NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"Fyers processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, "
+            f"{len(filtered_nfo)} NFO futures, "
+            f"{len(options_items)} options."
+        )
+
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
+    def process_zerodha(self):
+        logger.info("Fetching Zerodha/Kite master...")
+        import urllib.request, csv, io
+        url = "https://api.kite.trade/instruments"
+        try:
+            r = urllib.request.urlopen(url)
+            csv_data = r.read().decode('utf-8')
+            reader = csv.DictReader(io.StringIO(csv_data))
+        except Exception as e:
+            logger.error(f"Failed to fetch Zerodha master: {e}")
+            return
+
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+        options_items = []
+
+        for row in reader:
+            exch = row.get("exchange", "").upper()
+            segment = row.get("segment", "").upper()
+            raw_itype = row.get("instrument_type", "").upper()
+
+            # Only process Indian market exchanges
+            if exch not in ["NSE", "BSE", "NFO", "MCX"]:
+                continue
+
+            if raw_itype == "EQ":
+                u_itype = "EQUITY"
+            elif raw_itype in ["FUT", "FUTCOM", "FUTIDX", "FUTSTK"]:
+                u_itype = "FUTURES"
+            elif raw_itype in ["CE", "PE", "OPTIDX", "OPTSTK", "OPTCOM"]:
+                u_itype = "OPTIONS"
+            else:
+                continue
+
+            std_exch = exch
+            if exch == "NFO": std_exch = "NFO"
+            elif exch == "MCX": std_exch = "MCX"
+            elif exch == "NSE" and u_itype == "EQUITY": std_exch = "NSE"
+
+            base_symbol = row.get("name", "") or row.get("tradingsymbol", "")
+            instrument_token = row.get("instrument_token", "")
+            
+            expiry_raw = row.get("expiry", "")
+            expiry_str = ""
+            if expiry_raw:
+                try:
+                    dt = datetime.strptime(expiry_raw, "%Y-%m-%d")
+                    expiry_str = dt.strftime("%d%b%Y").upper()
+                except:
+                    pass
+
+            opt_type = ""
+            if raw_itype == "CE":
+                opt_type = "CE"
+            elif raw_itype == "PE":
+                opt_type = "PE"
+            elif u_itype == "OPTIONS":
+                sym = row.get("tradingsymbol", "")
+                opt_type = "CE" if sym.endswith("CE") else "PE" if sym.endswith("PE") else ""
+
+            uId = self.generate_uId(
+                std_exch, base_symbol, u_itype,
+                expiry=expiry_str,
+                strike=row.get("strike"),
+                option_type=opt_type
+            )
+
+            record = {
+                "uId": uId,
+                "broker_name": "zerodha",
+                "native_token": instrument_token,
+                "symbol": base_symbol,
+                "full_symbol": row.get("tradingsymbol"),
+                "exch": std_exch,
+                "itype": u_itype,
+                "expiry": expiry_str,
+                "strike": row.get("strike"),
+                "lotsize": row.get("lot_size", 0),
+                "cp": float(row.get("last_price", 0) or 0)
+            }
+
+            if u_itype == "EQUITY":
+                equity_items.append(record)
+            elif u_itype == "FUTURES" and std_exch == "MCX":
+                mcx_futures.append(record)
+            elif u_itype == "FUTURES" and std_exch == "NFO":
+                nfo_futures.append(record)
+            elif u_itype == "OPTIONS":
+                options_items.append(record)
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} Zerodha MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} Zerodha NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"Zerodha processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, {len(filtered_nfo)} NFO futures."
+        )
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
+
+    def process_groww(self):
+        logger.info("Fetching Groww master...")
+        import urllib.request, csv, io
+        # Groww public instrument CSV
+        url = "https://growwapi.groww.in/v1/historical/instrument?exchange=NSE&segment=CASH"
+        
+        equity_items = []
+        mcx_futures = []
+        nfo_futures = []
+
+        for segment_code, segment_name, std_exch in [
+            ("CASH", "NSE_EQ", "NSE"),
+            ("FNO", "NSE_FO", "NFO"),
+            ("COMMODITY", "MCX_FO", "MCX"),
+        ]:
+            try:
+                seg_url = f"https://growwapi.groww.in/v1/historical/instrument?exchange=NSE&segment={segment_code}"
+                if segment_code == "COMMODITY":
+                    seg_url = "https://growwapi.groww.in/v1/historical/instrument?exchange=MCX&segment=COMMODITY"
+                
+                req = urllib.request.Request(seg_url, headers={"User-Agent": "OneTerminal/2.5"})
+                r = urllib.request.urlopen(req, timeout=20)
+                data_bytes = r.read()
+                
+                # Groww returns JSON array
+                import json as _json
+                instruments = _json.loads(data_bytes.decode('utf-8'))
+                if not isinstance(instruments, list):
+                    instruments = instruments.get("data", [])
+
+                for item in instruments:
+                    exchange_token = str(item.get("exchange_token") or item.get("exchangeToken", ""))
+                    trading_symbol = item.get("trading_symbol") or item.get("tradingSymbol", "")
+                    name = item.get("name") or item.get("company_name", trading_symbol)
+                    raw_itype = (item.get("instrument_type") or item.get("instrumentType", "")).upper()
+                    expiry_raw = item.get("expiry") or item.get("expiry_date", "")
+                    lotsize = item.get("lot_size") or item.get("lotSize", 1)
+                    
+                    if raw_itype in ["", "EQ", "EQUITY"]:
+                        u_itype = "EQUITY"
+                    elif "FUT" in raw_itype:
+                        u_itype = "FUTURES"
+                    elif raw_itype in ["CE", "PE"] or "OPT" in raw_itype:
+                        u_itype = "OPTIONS"
+                    else:
+                        continue
+
+                    expiry_str = ""
+                    if expiry_raw:
+                        for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d%b%Y"]:
+                            try:
+                                dt = datetime.strptime(str(expiry_raw), fmt)
+                                expiry_str = dt.strftime("%d%b%Y").upper()
+                                break
+                            except:
+                                pass
+
+                    uId = self.generate_uId(std_exch, name or trading_symbol, u_itype, expiry=expiry_str)
+
+                    # Groww native token: stored as "SEGMENT:exchange_token"
+                    native_token = f"{segment_code}:{exchange_token}"
+
+                    record = {
+                        "uId": uId,
+                        "broker_name": "groww",
+                        "native_token": native_token,
+                        "symbol": name or trading_symbol,
+                        "full_symbol": trading_symbol,
+                        "exch": std_exch,
+                        "itype": u_itype,
+                        "expiry": expiry_str,
+                        "lotsize": lotsize,
+                        "cp": 0.0
+                    }
+
+                    if u_itype == "EQUITY":
+                        equity_items.append(record)
+                    elif u_itype == "FUTURES" and std_exch == "MCX":
+                        mcx_futures.append(record)
+                    elif u_itype == "FUTURES" and std_exch == "NFO":
+                        nfo_futures.append(record)
+
+            except Exception as e:
+                logger.warning(f"Groww segment {segment_code} failed: {e} — skipping.")
+
+        logger.info(f"Applying Triple-Month filter to {len(mcx_futures)} Groww MCX futures...")
+        filtered_mcx = self._apply_triple_month_filter(mcx_futures, "MCX")
+        logger.info(f"Applying Triple-Month filter to {len(nfo_futures)} Groww NFO futures...")
+        filtered_nfo = self._apply_triple_month_filter(nfo_futures, "NFO")
+
+        logger.info(
+            f"Groww processed: {len(equity_items)} equities, "
+            f"{len(filtered_mcx)} MCX futures, {len(filtered_nfo)} NFO futures."
+        )
+        self.all_items.extend(equity_items)
+        self.all_items.extend(filtered_mcx)
+        self.all_items.extend(filtered_nfo)
 
     def run(self):
-        # Step 1: Wipe existing derivatives
-        self.wipe_derivatives()
+        # Step 1: Complete Wipe
+        self.wipe_all()
         
-        # Step 2: Fetch and filter
+        # Step 2: Fetch and filter (Angel first as baseline, then all others)
         self.process_angel()
+        self.process_fyers()
+        self.process_upstox()
+        self.process_zerodha()
+        self.process_groww()
         
         # Step 3: Push clean data
         self.batch_push()

@@ -12,7 +12,7 @@ from services.currency_service import CurrencyService
 from services.ws_manager import manager
 from services.unified_ws_manager import unified_manager
 from services.token_manager import token_manager
-from services.indian_stock_brokers import angel_handler, fyers_handler, upstox_handler
+from services.indian_stock_brokers import angel_handler, fyers_handler, upstox_handler, zerodha_handler, groww_handler
 from services.international_brokers import alpaca_handler, nium_handler
 
 # Configure Logging
@@ -50,7 +50,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 
                 if action == "subscribe":
                     token = msg.get("token") # Access/JWT Token
-                    await unified_manager.subscribe(user_id, broker, symbols, token)
+                    is_primary = msg.get("is_primary", True) # Default to primary if not specified
+                    await unified_manager.subscribe(user_id, broker, symbols, token, is_primary=is_primary)
                 elif action == "unsubscribe":
                     pass # TODO: Implement unsubscribe
             except Exception as e:
@@ -64,6 +65,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 app.include_router(angel_handler.router, prefix="/angel", tags=["AngelOne"])
 app.include_router(fyers_handler.router, prefix="/fyers", tags=["Fyers"])
 app.include_router(upstox_handler.router, prefix="/upstox", tags=["Upstox"])
+app.include_router(zerodha_handler.router, prefix="/zerodha", tags=["Zerodha"])
+app.include_router(groww_handler.router, prefix="/groww", tags=["Groww"])
 app.include_router(alpaca_handler.router, prefix="/v1/alpaca", tags=["Alpaca"])
 app.include_router(nium_handler.router, prefix="/v1/nium", tags=["Nium"])
 
@@ -108,7 +111,7 @@ async def health():
         "status": "Live", 
         "version": config.VERSION, 
         "architecture": "Modular (Router-Handler)",
-        "handlers": ["angel", "fyers", "upstox", "binance"]
+        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "binance", "alpaca"]
     }
 
 @app.api_route("/relay", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -139,8 +142,11 @@ async def universal_relay(
         return await fyers_handler.handle_fyers_request(path, request, db, xff, uuid)
     elif broker == "upstox":
         return await upstox_handler.handle_upstox_request(path, request, db, xff, uuid)
+    elif broker == "zerodha":
+        return await zerodha_handler.handle_zerodha_request(path, request, db, xff, uuid)
+    elif broker == "groww":
+        return await groww_handler.handle_groww_request(path, request, db, xff, uuid)
     else:
-        # Placeholder for other brokers (Generic Relay)
         return JSONResponse(status_code=501, content={"error": f"Handler for '{broker}' not implemented yet."})
 
 if __name__ == "__main__":

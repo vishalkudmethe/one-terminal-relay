@@ -31,6 +31,12 @@ class UnifiedWSManager:
         # This solves the "Name Mismatch" problem (e.g. app asks for MCX:GOLD, broker says MCX:GOLD26MARFUT)
         self._token_to_uId_map: Dict[str, Dict[str, Dict[str, str]]] = {}
 
+        # --- Failover Architecture ---
+        # user_id -> broker_name (the PRIMARY broker for this user session)
+        # Only ticks from the primary broker are pushed to the UI.
+        # Secondary brokers are kept warm in the background for instant failover.
+        self.primary_broker: Dict[str, str] = {}
+
     async def connect_client(self, user_id: str, websocket: WebSocket):
         await websocket.accept()
         if user_id not in self.client_connections:
@@ -57,8 +63,13 @@ class UnifiedWSManager:
         if user_id in self.subscriptions:
             del self.subscriptions[user_id]
 
-    async def subscribe(self, user_id: str, broker: str, symbols: list, token: str):
-        """Subscribe to symbols for a specific broker and user."""
+    async def subscribe(self, user_id: str, broker: str, symbols: list, token: str, is_primary: bool = True):
+        """Subscribe to symbols for a specific broker and user.
+        
+        Args:
+            is_primary: If True, this broker's ticks will be pushed to the UI.
+                        If False, the broker is kept warm (standby) for failover only.
+        """
         if user_id not in self.subscriptions:
             self.subscriptions[user_id] = {}
         if broker not in self.subscriptions[user_id]:
@@ -66,7 +77,19 @@ class UnifiedWSManager:
         
         self.subscriptions[user_id][broker].update(symbols)
         
-        # Build local uId map for this broker
+        # Set the primary broker if this subscription is marked as primary
+        if is_primary:
+            old_primary = self.primary_broker.get(user_id, "none")
+            self.primary_broker[user_id] = broker
+            if old_primary != broker:
+                logger.info(f"[Failover] Primary broker for {user_id} SET to: {broker} (was: {old_primary})")
+        else:
+            # Only set primary if not already set
+            if user_id not in self.primary_broker:
+                self.primary_broker[user_id] = broker
+            logger.info(f"[Failover] Broker {broker} for {user_id} started in WARM STANDBY mode.")
+        
+        # Build local uId map for this broker (uId -> native_token and native_token -> uId)
         if user_id not in self._token_to_uId_map:
             self._token_to_uId_map[user_id] = {}
         if broker not in self._token_to_uId_map[user_id]:
@@ -97,12 +120,20 @@ class UnifiedWSManager:
     async def broadcast_tick(self, user_id: str, broker: str, native_token: str, ltp: float, volume: int = 0, cp: float = 0.0):
         """
         Normalization Engine:
-        1. Resolve uId (Preferring client's requested name, then TokenManager)
-        2. Enrich data (math for change_percent)
-        3. Delta Filtering (only send if price/volume changed)
-        4. Broadcast as Protobuf
+        1. Gate: Only process ticks from the PRIMARY broker. Secondary stays warm but silent.
+        2. Resolve uId (Preferring client's requested name, then TokenManager)
+        3. Enrich data (math for change_percent)
+        4. Delta Filtering (only send if price/volume changed)
+        5. Broadcast as Protobuf
         """
-        # 1. Resolve uId
+        # 1. Failover Gate — only push to UI if this broker is the primary
+        current_primary = self.primary_broker.get(user_id)
+        if current_primary and current_primary != broker:
+            # Secondary broker is receiving ticks but is kept silent.
+            # This allows it to maintain a "warm" connection ready for instant failover.
+            return
+
+        # 2. Resolve uId
         # Priority: Map what the client ASKED for, then fallback to global mapping
         uId = self._token_to_uId_map.get(user_id, {}).get(broker, {}).get(str(native_token))
         if not uId:
@@ -111,7 +142,7 @@ class UnifiedWSManager:
         if not uId:
             return
 
-        # 2. Delta Filtering
+        # 3. Delta Filtering
         if user_id not in self.last_broadcasted:
             self.last_broadcasted[user_id] = {}
         
@@ -122,7 +153,7 @@ class UnifiedWSManager:
         # Update cache
         self.last_broadcasted[user_id][uId] = {'ltp': ltp, 'v': volume}
 
-        # 3. Enrich Data
+        # 4. Enrich Data
         meta = token_manager.get_metadata(uId) or {}
         
         # Use broker provided cp if available (Snap Quote), else fallback to DynamoDB meta
@@ -131,7 +162,7 @@ class UnifiedWSManager:
         chg = round(ltp - final_cp, 2) if final_cp > 0 else 0.0
         chgp = round((chg / final_cp * 100), 2) if final_cp > 0 else 0.0
 
-        # 4. Protobuf Serialization
+        # 5. Protobuf Serialization
         exp_seq = token_manager.get_expiry_sequence(uId)
         
         if market_data_pb2:
@@ -164,6 +195,18 @@ class UnifiedWSManager:
                 "type": "TICK"
             })
 
+    async def failover(self, user_id: str, failed_broker: str):
+        """Perform a silent failover: promote the next available warm broker to primary."""
+        subs = self.broker_tasks.get(user_id, {})
+        # Find a warm broker that is still running
+        for broker, task in subs.items():
+            if broker != failed_broker and not task.done():
+                old = self.primary_broker.get(user_id)
+                self.primary_broker[user_id] = broker
+                logger.warning(f"[Failover] SILENT FAILOVER triggered for {user_id}: {old} -> {broker}")
+                return
+        logger.error(f"[Failover] No warm standby broker available for {user_id}. Primary {failed_broker} failed.")
+
     async def _broadcast_binary(self, user_id: str, data: bytes):
         """Send binary Protobuf data to all active user connections."""
         if user_id in self.client_connections:
@@ -184,7 +227,15 @@ class UnifiedWSManager:
                     logger.error(f"Error broadcasting JSON to {user_id}: {e}")
 
     def get_subscriptions(self, user_id: str, broker: str) -> list:
+        """Returns the list of uIds subscribed by the user for this broker."""
         return list(self.subscriptions.get(user_id, {}).get(broker, []))
+
+    def get_native_subscriptions(self, user_id: str, broker: str) -> list:
+        """Returns the list of native tokens for the given broker.
+        Used by upstream WebSocket clients to subscribe to broker-specific feeds.
+        """
+        token_map = self._token_to_uId_map.get(user_id, {}).get(broker, {})
+        return list(token_map.keys())
 
 # Singleton instance
 unified_manager = UnifiedWSManager()
