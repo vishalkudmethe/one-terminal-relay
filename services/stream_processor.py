@@ -10,7 +10,7 @@ from services.indian_stock_brokers.kotak_ws import kotak_client
 from services.indian_stock_brokers.hdfc_ws import hdfc_client
 from services.indian_stock_brokers.dhan_ws import dhan_client
 from services.indian_stock_brokers.motilal_ws import motilal_client
-from services.indian_stock_brokers.anandrathi_ws import anandrathi_client
+from services.indian_stock_brokers.xts_ws import xts_client
 from services.indian_stock_brokers.prabhudas_ws import prabhudas_client
 from services.indian_stock_brokers.axis_ws import axis_client
 from services.indian_stock_brokers.iifl_ws import iifl_client
@@ -42,8 +42,8 @@ def get_broker_client(user_id: str, broker: str, token: str, manager):
         return dhan_client(user_id, token, manager)
     elif broker == "motilal":
         return motilal_client(user_id, token, manager)
-    elif broker == "anandrathi":
-        return anandrathi_client(user_id, token, manager)
+    elif broker == "xts":
+        return xts_client(user_id, token, manager)
     elif broker == "prabhudas":
         return prabhudas_client(user_id, token, manager)
     elif broker == "axis":

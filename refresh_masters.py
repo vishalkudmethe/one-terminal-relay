@@ -799,10 +799,10 @@ class MasterMigrator:
         # Motilal Oswal MOAPI requires auth to hit their getscripsbyexchangename API
         logger.info("Motilal Oswal Master fetch requires auth. Stub executed.")
 
-    def process_anandrathi(self):
-        logger.info("Fetching Anand Rathi master...")
-        # Anand Rathi (XTS) requires auth to hit their master endpoint
-        logger.info("Anand Rathi Master fetch requires auth. Stub executed.")
+    def process_xts(self):
+        logger.info("Fetching Universal XTS master...")
+        # XTS requires auth to hit their master endpoint (dynamic base URL)
+        logger.info("Universal XTS Master fetch requires auth. Stub executed.")
 
     def process_prabhudas(self):
         logger.info("Fetching Prabhudas Lilladher master...")
@@ -948,7 +948,7 @@ class MasterMigrator:
         self.process_hdfc()
         self.process_dhan()
         self.process_motilal()
-        self.process_anandrathi()
+        self.process_xts()
         self.process_prabhudas()
         self.process_axis()
         self.process_iifl()

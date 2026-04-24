@@ -15,7 +15,7 @@ from services.token_manager import token_manager
 from services.indian_stock_brokers import (
     angel_handler, fyers_handler, upstox_handler, zerodha_handler, 
     groww_handler, icici_handler, kotak_handler, hdfc_handler,
-    dhan_handler, motilal_handler, anandrathi_handler, prabhudas_handler,
+    dhan_handler, motilal_handler, xts_handler, prabhudas_handler,
     axis_handler, iifl_handler, nuvama_handler, profitmart_handler, religare_handler
 )
 from services.international_brokers import alpaca_handler, nium_handler
@@ -77,7 +77,7 @@ app.include_router(kotak_handler.router, prefix="/kotak", tags=["Kotak"])
 app.include_router(hdfc_handler.router, prefix="/hdfc", tags=["HDFC"])
 app.include_router(dhan_handler.router, prefix="/dhan", tags=["Dhan"])
 app.include_router(motilal_handler.router, prefix="/motilal", tags=["Motilal Oswal"])
-app.include_router(anandrathi_handler.router, prefix="/anandrathi", tags=["Anand Rathi"])
+app.include_router(xts_handler.router, prefix="/xts", tags=["Universal XTS"])
 app.include_router(prabhudas_handler.router, prefix="/prabhudas", tags=["Prabhudas Lilladher"])
 app.include_router(axis_handler.router, prefix="/axis", tags=["Axis Direct"])
 app.include_router(iifl_handler.router, prefix="/iifl", tags=["IIFL"])
@@ -128,7 +128,7 @@ async def health():
         "status": "Live", 
         "version": config.VERSION, 
         "architecture": "Modular (Router-Handler)",
-        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "dhan", "motilal", "anandrathi", "prabhudas", "axis", "iifl", "nuvama", "profitmart", "religare", "binance", "alpaca"]
+        "handlers": ["angel", "fyers", "upstox", "zerodha", "groww", "icici", "kotak", "hdfc", "dhan", "motilal", "xts", "prabhudas", "axis", "iifl", "nuvama", "profitmart", "religare", "binance", "alpaca"]
     }
 
 @app.api_route("/relay", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -173,8 +173,8 @@ async def universal_relay(
         return await dhan_handler.handle_dhan_request(path, request, db, xff, uuid)
     elif broker == "motilal":
         return await motilal_handler.handle_motilal_request(path, request, db, xff, uuid)
-    elif broker == "anandrathi":
-        return await anandrathi_handler.handle_anandrathi_request(path, request, db, xff, uuid)
+    elif broker == "xts":
+        return await xts_handler.handle_xts_request(path, request, db, xff, uuid)
     elif broker == "prabhudas":
         return await prabhudas_handler.handle_prabhudas_request(path, request, db, xff, uuid)
     elif broker == "axis":
